@@ -21,8 +21,9 @@ etapa, cerrar cada agujero.
 | `svd.downloader` | **El script que probás en la Fase 1**: baja los segmentos con el token y los junta en un `.mp4` | [src/svd/downloader.py](src/svd/downloader.py) |
 | `svd.telemetry` | Manda el evento del reproductor (`/video-diagnostic/event`) | [src/svd/telemetry.py](src/svd/telemetry.py) |
 | `svd.cli` | CLI `svd` (todo parametrizable por flag o `.env`) | [src/svd/cli.py](src/svd/cli.py) |
-| `lab_origin` | **Origen-fixture local**: sirve el HLS validando el token (403 si falla) | [src/lab_origin/](src/lab_origin/) |
-| threat-model | La tabla de amenazas + el diseño de la **Etapa 2** (contramedidas) | [docs/threat-model.md](docs/threat-model.md) |
+| `lab_origin.app` | **Origen-fixture local**: sirve el HLS validando el token (403 si falla) | [src/lab_origin/app.py](src/lab_origin/app.py) |
+| `lab_origin.defense` | **Defensas Etapa 2**: rate limit, pacing, binding multi-IP, concurrencia, gate de playback | [src/lab_origin/defense.py](src/lab_origin/defense.py) |
+| threat-model | La tabla de amenazas + el estado de cada contramedida (**Etapa 2**) | [docs/threat-model.md](docs/threat-model.md) |
 
 ## Requisitos
 
@@ -135,9 +136,63 @@ Cubre firma/verificación de tokens, parseo de playlists y un end-to-end del
 descargador contra el origen-fixture (token válido → 200 + archivo; vencido /
 ajeno / sin token → 403).
 
-## Fase 2: evitar que esto pase
+## Fase 2: evitar que esto pase (implementada)
 
-Una vez que confirmaste que el video se puede bajar con un script, el siguiente
-paso es cerrar cada agujero. El modelo de amenazas y las contramedidas (tokens
-cortos y renovables, binding a sesión/IP, AES-128, DRM, rate limiting, marca de
-agua, etc.) están en **[docs/threat-model.md](docs/threat-model.md)**.
+Una vez confirmado que el video se puede bajar con un script, la Fase 2 cierra
+cada agujero. El mapa ataque→control y el estado de cada uno están en
+**[docs/threat-model.md](docs/threat-model.md)**. Las defensas de comportamiento
+del origen son **opt-in**: se activan con `SVD_DEFENSE=1`.
+
+```bash
+# Origen con defensas activas (rate limit, pacing, binding multi-IP, etc.)
+SVD_SECRET=... SVD_DEFENSE=1 SVD_MAX_IPS=1 SVD_REQUIRE_PLAYBACK=1 \
+  uvicorn lab_origin.app:app --port 8000 --app-dir src
+```
+
+### Token atado a sesión / IP (binding)
+
+```bash
+# Token que sólo sirve para la sesión "abc123" y desde una IP concreta
+python -m svd.tokens sign --acl "/<id>/adaptive_video/*" --ttl 120 \
+  --session abc123 --ip 203.0.113.7
+
+# El reproductor legítimo presenta su sesión; el downloader lo emula con --session
+svd download --token "..." --session abc123 --playlist "/<id>/adaptive_video/master.m3u8"
+```
+
+Si copiás ese token a otra sesión u otra IP, el origen responde **403**
+(`session_mismatch` / `ip_mismatch`): el campo va firmado, no se puede alterar.
+
+### Tokens cortos + renovación
+
+```bash
+# El reproductor pide un token nuevo antes de que venza el actual
+curl -X POST "http://localhost:8000/token/renew?token=<token-actual>&session=abc123"
+# -> {"token": "<token-nuevo>", "ttl": 120}
+```
+
+### Rotación de clave sin cortar el servicio
+
+```bash
+# Clave nueva como primaria, la anterior sigue validando lo ya emitido
+SVD_SECRET=<clave-nueva> SVD_SECRET_PREVIOUS=<clave-vieja> \
+  uvicorn lab_origin.app:app --port 8000 --app-dir src
+```
+
+### Cifrado AES-128
+
+```bash
+python -m lab_origin.make_sample --encrypt   # genera HLS con #EXT-X-KEY AES-128
+```
+
+El downloader baja los segmentos cifrados pero **no** los descifra a propósito:
+vas a ver el salto de dificultad (necesitás la clave AES, servida bajo token). El
+único control que frena esto de verdad es DRM, que queda fuera del lab (requiere
+un CDM y un packager comerciales).
+
+### Suite de abuso
+
+`pytest` corre, además de la Fase 1, una prueba por cada defensa (403/429/alerta):
+rate limit, pacing anti-ráfaga, reuso multi-IP, concurrencia, gate de playback,
+binding, rotación y el salto AES. Corre también en CI
+(**[.github/workflows/ci.yml](.github/workflows/ci.yml)**).
