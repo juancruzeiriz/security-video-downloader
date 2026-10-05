@@ -29,12 +29,21 @@ DEFAULT_USER_AGENT = (
 )
 
 
-def attach_token(url: str, token: str | None) -> str:
-    """Pega el token a la URL sin codificarlo (formato exp=..~acl=..~hmac=..)."""
-    if not token:
+def attach_token(url: str, token: str | None, session: str | None = None) -> str:
+    """Pega el token (y opcionalmente la sesion) a la URL sin codificar el token.
+
+    El token va VERBATIM (exp=..~acl=..~hmac=..). La ``session`` emula la que el
+    reproductor presentaria (cookie/header) para satisfacer el binding del token.
+    """
+    parts: list[str] = []
+    if token:
+        parts.append(f"token={token}")
+    if session:
+        parts.append(f"session={session}")
+    if not parts:
         return url
     sep = "&" if "?" in url else "?"
-    return f"{url}{sep}token={token}"
+    return f"{url}{sep}" + "&".join(parts)
 
 
 @dataclass
@@ -77,9 +86,11 @@ class Downloader:
         user_agent: str = DEFAULT_USER_AGENT,
         concurrency: int = 1,
         timeout: float = 30.0,
+        session: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/") + "/"
         self.token = token
+        self.session_id = session
         self.concurrency = max(1, concurrency)
         self.timeout = timeout
         self.session = requests.Session()
@@ -88,7 +99,7 @@ class Downloader:
     # -- fetch helpers -----------------------------------------------------
 
     def _get(self, url: str) -> tuple[requests.Response | None, RequestLog]:
-        tokened = attach_token(url, self.token)
+        tokened = attach_token(url, self.token, self.session_id)
         start = time.perf_counter()
         try:
             resp = self.session.get(tokened, timeout=self.timeout)

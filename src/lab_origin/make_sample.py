@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -27,7 +28,26 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
-def build(media_root: str, video_id: str, duration: int = 6) -> str:
+def _write_key_info(out_dir: str, video_id: str) -> str:
+    """Genera la clave AES-128 y el key_info_file que consume ffmpeg.
+
+    - La CLAVE (16 bytes) se guarda en ``enc.key`` dentro del arbol del video, de
+      modo que la sirva el ORIGEN bajo token (no la CDN publica).
+    - El key_info_file le dice a ffmpeg: (1) la URI que escribe en el playlist,
+      (2) el archivo de clave a usar, (3) el IV.
+    """
+    key_path = os.path.join(out_dir, "enc.key")
+    with open(key_path, "wb") as fh:
+        fh.write(secrets.token_bytes(16))
+    key_uri = f"/{video_id}/adaptive_video/enc.key"
+    iv = secrets.token_hex(16)
+    info_path = os.path.join(out_dir, "enc.keyinfo")
+    with open(info_path, "w", encoding="utf-8") as fh:
+        fh.write(f"{key_uri}\n{key_path}\n{iv}\n")
+    return info_path
+
+
+def build(media_root: str, video_id: str, duration: int = 6, encrypt: bool = False) -> str:
     out_dir = os.path.join(media_root, video_id, "adaptive_video")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -53,9 +73,16 @@ def build(media_root: str, video_id: str, duration: int = 6) -> str:
         "-master_pl_name", "master.m3u8",
         "-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod",
         "-hls_segment_filename", seg_pattern,
-        var_playlist,
     ]
+    info_path = None
+    if encrypt:
+        info_path = _write_key_info(out_dir, video_id)
+        cmd += ["-hls_key_info_file", info_path]
+    cmd.append(var_playlist)
     subprocess.run(cmd, check=True)
+    if info_path and os.path.exists(info_path):
+        # El keyinfo solo lo necesita ffmpeg al empaquetar; no debe quedar servido.
+        os.remove(info_path)
     _normalize_separators(out_dir)
     return out_dir
 
@@ -77,12 +104,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--media-root", default=os.environ.get("SVD_MEDIA_ROOT", "media/hls"))
     parser.add_argument("--id", dest="video_id", default=DEFAULT_ID)
     parser.add_argument("--duration", type=int, default=6)
+    parser.add_argument(
+        "--encrypt", action="store_true",
+        help="Cifra los segmentos con AES-128 (#EXT-X-KEY); la clave la sirve el origen bajo token",
+    )
     args = parser.parse_args(argv)
 
-    out_dir = build(args.media_root, args.video_id, args.duration)
+    out_dir = build(args.media_root, args.video_id, args.duration, encrypt=args.encrypt)
     print(f"HLS de muestra generado en: {out_dir}")
     print(f"Playlist master: /{args.video_id}/adaptive_video/master.m3u8")
     print(f"acl sugerido:    /{args.video_id}/adaptive_video/*")
+    if args.encrypt:
+        print("Cifrado AES-128 activado. La clave esta en enc.key (servida bajo token).")
+        print("El downloader NO descifra a proposito: vas a ver el salto de dificultad.")
     return 0
 
 

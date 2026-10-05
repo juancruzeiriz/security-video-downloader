@@ -61,3 +61,46 @@ def test_acl_wildcard_matches_master_and_segments():
     assert tokens.acl_matches(ACL, "/demo0001-0000-0000-0000-000000000001/adaptive_video/master.m3u8")
     assert tokens.acl_matches(ACL, "/demo0001-0000-0000-0000-000000000001/adaptive_video/variant_0/seg_000.ts")
     assert not tokens.acl_matches(ACL, "/demo0001-0000-0000-0000-000000000001/otro/master.m3u8")
+
+
+# -- Etapa 2: binding de sesion/IP y rotacion de clave ----------------------
+
+def test_session_binding_requires_matching_session():
+    token = tokens.sign(SECRET, ACL, ttl=3600, session="S1")
+    assert tokens.verify(SECRET, token, PATH_OK, session="S1").ok
+    bad = tokens.verify(SECRET, token, PATH_OK, session="S2")
+    assert not bad and bad.reason == "session_mismatch"
+    # sin pasar la sesion del pedido tampoco valida
+    assert tokens.verify(SECRET, token, PATH_OK).reason == "session_mismatch"
+
+
+def test_ip_binding_requires_matching_ip():
+    token = tokens.sign(SECRET, ACL, ttl=3600, ip="203.0.113.7")
+    assert tokens.verify(SECRET, token, PATH_OK, client_ip="203.0.113.7").ok
+    bad = tokens.verify(SECRET, token, PATH_OK, client_ip="198.51.100.9")
+    assert not bad and bad.reason == "ip_mismatch"
+
+
+def test_binding_fields_are_signed():
+    # cambiar la sesion del token sin re-firmar rompe la firma
+    token = tokens.sign(SECRET, ACL, ttl=3600, session="S1")
+    tampered = token.replace("session=S1", "session=S2")
+    res = tokens.verify(SECRET, tampered, PATH_OK, session="S2")
+    assert not res and res.reason == "bad_signature"
+
+
+def test_token_without_binding_stays_backward_compatible():
+    # un token clasico (solo exp~acl~hmac) no impone binding
+    token = tokens.sign(SECRET, ACL, ttl=3600)
+    assert tokens.verify(SECRET, token, PATH_OK).ok
+    parsed = tokens.parse(token)
+    assert parsed.session is None and parsed.ip is None
+
+
+def test_key_rotation_list_accepts_either_key():
+    new_key, old_key = "clave-nueva-xxxxxxxxxxxxxxxxxxxx", "clave-vieja-yyyyyyyyyyyyyyyyyyyy"
+    token_old = tokens.sign(old_key, ACL, ttl=3600)
+    # durante la rotacion se pasan ambas; vale la vieja
+    assert tokens.verify([new_key, old_key], token_old, PATH_OK).ok
+    # una clave ajena no valida
+    assert not tokens.verify([new_key, "clave-ajena-zzzzzzzzzzzzzzzzzz"], token_old, PATH_OK)

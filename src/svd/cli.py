@@ -77,6 +77,7 @@ def _cmd_download(args: argparse.Namespace) -> int:
         user_agent=user_agent,
         concurrency=args.concurrency,
         timeout=args.timeout,
+        session=args.session,
     )
 
     # Telemetria opcional ANTES de bajar (emula al reproductor real).
@@ -142,26 +143,31 @@ def _add_telemetry_overrides(p: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="svd", description=__doc__.split("\n", 1)[0])
-    parser.add_argument("--base-url", help="Host del origen (o env SVD_BASE_URL)")
-    parser.add_argument("--token", help="Token exp=..~acl=..~hmac=.. (o env SVD_TOKEN)")
-    parser.add_argument("--user-agent", dest="user_agent", help="User-Agent (o env SVD_USER_AGENT)")
+
+    # Flags comunes a los subcomandos. Van en un parser PADRE para que funcionen
+    # DESPUES del subcomando (svd download --base-url ... --token ...).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--base-url", help="Host del origen (o env SVD_BASE_URL)")
+    common.add_argument("--token", help="Token exp=..~acl=..~hmac=.. (o env SVD_TOKEN)")
+    common.add_argument("--user-agent", dest="user_agent", help="User-Agent (o env SVD_USER_AGENT)")
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    d = sub.add_parser("download", help="Baja y reensambla un HLS protegido")
+    d = sub.add_parser("download", parents=[common], help="Baja y reensambla un HLS protegido")
     d.add_argument("--playlist", required=True, help="Ruta/URL de la playlist (master o media)")
     d.add_argument("--out", default="media/out/video.mp4", help="Archivo de salida")
     d.add_argument("--segments-dir", dest="segments_dir", default="media/out/segments")
     d.add_argument("--variant", help="480p | highest | lowest | first (para master playlists)")
     d.add_argument("--concurrency", type=int, default=1, help="Workers de descarga (default 1)")
     d.add_argument("--timeout", type=float, default=30.0)
+    d.add_argument("--session", help="Id de sesion a presentar (para tokens con binding a sesion)")
     d.add_argument("--no-reassemble", dest="no_reassemble", action="store_true")
     d.add_argument("--strict", action="store_true", help="Exit code 2 si algun pedido no fue 200")
     d.add_argument("--telemetry", action="store_true", help="Manda un evento antes de bajar")
     _add_telemetry_overrides(d)
     d.set_defaults(func=_cmd_download)
 
-    t = sub.add_parser("telemetry", help="Solo manda un evento de telemetria")
+    t = sub.add_parser("telemetry", parents=[common], help="Solo manda un evento de telemetria")
     _add_telemetry_overrides(t)
     t.set_defaults(func=_cmd_telemetry)
 
