@@ -141,3 +141,19 @@ Una vez que confirmaste que el video se puede bajar con un script, el siguiente
 paso es cerrar cada agujero. El modelo de amenazas y las contramedidas (tokens
 cortos y renovables, binding a sesión/IP, AES-128, DRM, rate limiting, marca de
 agua, etc.) están en **[docs/threat-model.md](docs/threat-model.md)**.
+
+## Extra: YouTube → MP3 (recuperar audio de videos propios)
+
+[scripts/youtube_to_mp3.py](scripts/youtube_to_mp3.py) baja el audio de videos
+de YouTube **tuyos** y los deja en el formato que piden las plataformas de
+distribución: **MP3, 44.1 kHz, 128 kbps, estéreo, máx. 30 MB** (si alguno se
+pasa de 30 MB, el script avisa).
+
+```bash
+pip install yt-dlp        # + ffmpeg en el PATH
+python scripts/youtube_to_mp3.py                       # usa la lista DEFAULT_URLS del script
+python scripts/youtube_to_mp3.py URL1 URL2 --out media/mp3
+python scripts/youtube_to_mp3.py --file urls.txt       # una URL por línea
+```
+
+Los `.mp3` quedan en `media/mp3/` (gitignoreado), nombrados con el título del video.
