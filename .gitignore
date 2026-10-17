@@ -16,6 +16,7 @@ env/
 
 # Media generada y descargas del lab
 media/
+convert_to_audio/
 !media/.gitkeep
 
 # OS / editor
