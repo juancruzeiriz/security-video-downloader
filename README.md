@@ -144,17 +144,24 @@ agua, etc.) están en **[docs/threat-model.md](docs/threat-model.md)**.
 
 ## Extra: video → MP3 cortado en temas
 
-[scripts/split_to_mp3.py](scripts/split_to_mp3.py) pasa un video (p. ej. un
-show grabado) a **MP3, 44.1 kHz, 128 kbps CBR, estéreo** y lo corta en un archivo
-por tema, a partir de una lista `MM:SS - Título` (cada tema termina donde empieza
-el siguiente; el último va hasta el final). Avisa si algún tema pasa de 30 MB.
+[scripts/split_to_mp3.py](scripts/split_to_mp3.py) pasa un video (archivo local
+o link de YouTube) a **MP3, 44.1 kHz, 128 kbps CBR, estéreo** y lo corta en un
+archivo por tema. Si la entrada es un link, primero baja el video en MP4 a
+`convert_to_audio/` (solo ese video, aunque el link sea de una lista).
+
+Los temas salen, en este orden, de: `--tracks` (una línea `MM:SS - Título` por
+tema), los capítulos del video de YouTube, `DEFAULT_TRACKLIST` (solo para
+`convert_to_audio/videoplayback.mp4`) o, si no hay nada, un solo MP3 con el video
+entero. Cada tema termina donde empieza el siguiente; el último va hasta el final.
+Avisa si algún tema pasa de 30 MB o si dura distinto de lo esperado.
 
 ```bash
-# solo ffmpeg/ffprobe en el PATH
-python scripts/split_to_mp3.py                          # convert_to_audio/videoplayback.mp4 + DEFAULT_TRACKLIST
+# ffmpeg/ffprobe en el PATH; pip install yt-dlp para links
+python scripts/split_to_mp3.py                                    # videoplayback.mp4 + DEFAULT_TRACKLIST
+python scripts/split_to_mp3.py "https://www.youtube.com/watch?v=Q-HXQKFeECE" --tracks tracklists/Q-HXQKFeECE.txt
 python scripts/split_to_mp3.py show.mp4 --tracks temas.txt --out media/mp3/show
 ```
 
-Los temas quedan en `media/mp3/<nombre del video>/` como `01 - Título.mp3`,
-con título y número de pista en los tags. `convert_to_audio/` está gitignoreado
-para que el video no se suba al repo.
+Los temas quedan en `media/mp3/<título del video>/` como `01 - Título.mp3`, con
+título y número de pista en los tags. Las listas de temas van en `tracklists/`.
+`convert_to_audio/` está gitignoreado para que los videos no se suban al repo.

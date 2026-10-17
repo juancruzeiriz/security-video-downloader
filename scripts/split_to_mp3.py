@@ -1,4 +1,4 @@
-"""Convierte un video (p. ej. un show grabado) a MP3 y lo corta en temas.
+"""Convierte un video (archivo o link de YouTube) a MP3 y lo corta en temas.
 
 Formato de salida, igual que ``youtube_to_mp3.py``:
 
@@ -7,13 +7,19 @@ Formato de salida, igual que ``youtube_to_mp3.py``:
 Uso:
     python scripts/split_to_mp3.py
     python scripts/split_to_mp3.py otro_video.mp4 --tracks temas.txt [--out carpeta]
+    python scripts/split_to_mp3.py "https://www.youtube.com/watch?v=..." [--tracks temas.txt]
 
-Sin argumentos usa ``convert_to_audio/videoplayback.mp4`` y la lista
-DEFAULT_TRACKLIST de abajo. El archivo de temas tiene una linea por tema con
-el formato ``MM:SS - Titulo`` (o ``H:MM:SS - Titulo``); cada tema termina donde
-empieza el siguiente y el ultimo va hasta el final del video.
+Si la entrada es un link, primero baja el video en MP4 a ``convert_to_audio/``
+(solo ese video, aunque el link sea de una lista).
 
-Requisitos: ``ffmpeg`` y ``ffprobe`` en el PATH.
+De donde salen los temas, en este orden:
+  1. ``--tracks``: archivo con una linea ``MM:SS - Titulo`` (o ``H:MM:SS``) por tema;
+  2. los capitulos del video de YouTube, si tiene;
+  3. DEFAULT_TRACKLIST, si la entrada es ``convert_to_audio/videoplayback.mp4``;
+  4. si no, un solo MP3 con el video entero.
+Cada tema termina donde empieza el siguiente y el ultimo va hasta el final.
+
+Requisitos: ``ffmpeg`` y ``ffprobe`` en el PATH; ``pip install yt-dlp`` para links.
 """
 
 from __future__ import annotations
@@ -99,6 +105,33 @@ def safe_filename(name: str) -> str:
     return name or "audio"
 
 
+def tracks_from_chapters(chapters: list[dict]) -> list[Track]:
+    return [Track(i + 1, c.get("title") or f"Tema {i + 1}", float(c["start_time"]),
+                  float(c["end_time"]) if i + 1 < len(chapters) else None)
+            for i, c in enumerate(chapters)]
+
+
+def download_mp4(url: str, dest: Path) -> tuple[Path, str, list[Track]]:
+    """Baja el video en MP4. Devuelve (archivo, titulo, temas por capitulos)."""
+    try:
+        import yt_dlp
+    except ImportError:
+        sys.exit("Falta yt-dlp: pip install yt-dlp")
+    opts = {
+        "format": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+        "merge_output_format": "mp4",
+        "outtmpl": str(dest / "%(id)s.%(ext)s"),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+    path = Path(info["requested_downloads"][0]["filepath"])
+    title = info.get("title") or info["id"]
+    return path, title, tracks_from_chapters(info.get("chapters") or [])
+
+
 def probe(src: Path) -> tuple[float, bool]:
     """Devuelve (duracion en segundos, tiene pista de audio)."""
     out = subprocess.run(
@@ -133,10 +166,9 @@ def cut_to_mp3(src: Path, dst: Path, track: Track, total: int) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("input", nargs="?", type=Path, default=DEFAULT_INPUT,
-                   help=f"video de entrada (default: {DEFAULT_INPUT})")
-    p.add_argument("--tracks", type=Path,
-                   help="archivo con 'MM:SS - Titulo' por linea (default: DEFAULT_TRACKLIST)")
+    p.add_argument("input", nargs="?", default=str(DEFAULT_INPUT),
+                   help=f"video o link de YouTube (default: {DEFAULT_INPUT})")
+    p.add_argument("--tracks", type=Path, help="archivo con 'MM:SS - Titulo' por linea")
     p.add_argument("--out", type=Path, help="carpeta de salida (default: media/mp3/<video>)")
     args = p.parse_args(argv)
 
@@ -144,20 +176,41 @@ def main(argv: list[str] | None = None) -> int:
         if shutil.which(tool) is None:
             print(f"Falta {tool} en el PATH (https://ffmpeg.org/download.html).", file=sys.stderr)
             return 1
-    if not args.input.is_file():
-        print(f"No encuentro el video: {args.input.resolve()}", file=sys.stderr)
-        return 1
+    chapters: list[Track] = []
+    if re.match(r"https?://", args.input):
+        DEFAULT_INPUT.parent.mkdir(parents=True, exist_ok=True)
+        print(f"-> bajando {args.input}", flush=True)
+        try:
+            src, title, chapters = download_mp4(args.input, DEFAULT_INPUT.parent)
+        except Exception as exc:  # yt-dlp tira errores de varios tipos
+            print(f"  x no se pudo bajar: {exc}", file=sys.stderr)
+            return 1
+        print(f"  ok {src} ({title})")
+    else:
+        src = Path(args.input)
+        title = src.stem
+        if not src.is_file():
+            print(f"No encuentro el video: {src.resolve()}", file=sys.stderr)
+            return 1
 
-    text = args.tracks.read_text(encoding="utf-8") if args.tracks else DEFAULT_TRACKLIST
     try:
-        tracks = parse_tracklist(text)
+        if args.tracks:
+            tracks = parse_tracklist(args.tracks.read_text(encoding="utf-8"))
+        elif chapters:
+            print(f"  usando los {len(chapters)} capitulos del video")
+            tracks = chapters
+        elif src.resolve() == DEFAULT_INPUT.resolve():
+            tracks = parse_tracklist(DEFAULT_TRACKLIST)
+        else:
+            print("  sin lista de temas ni capitulos: un solo MP3 con el video entero")
+            tracks = [Track(1, title, 0, None)]
     except ValueError as exc:
         print(f"Lista de temas invalida: {exc}", file=sys.stderr)
         return 1
 
-    duration, has_audio = probe(args.input)
+    duration, has_audio = probe(src)
     if not has_audio:
-        print(f"{args.input.name} no tiene pista de audio.", file=sys.stderr)
+        print(f"{src.name} no tiene pista de audio.", file=sys.stderr)
         return 1
     late = [t for t in tracks if t.start >= duration]
     if late:
@@ -165,18 +218,23 @@ def main(argv: list[str] | None = None) -> int:
               + ", ".join(t.title for t in late), file=sys.stderr)
         return 1
 
-    out_dir = args.out or Path("media/mp3") / args.input.stem
+    out_dir = args.out or Path("media/mp3") / safe_filename(title)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     failed = 0
     for t in tracks:
-        dst = out_dir / f"{t.number:02d} - {safe_filename(t.title)}.mp3"
+        name = safe_filename(t.title)
+        dst = out_dir / (f"{t.number:02d} - {name}.mp3" if len(tracks) > 1 else f"{name}.mp3")
         try:
-            cut_to_mp3(args.input, dst, t, len(tracks))
+            cut_to_mp3(src, dst, t, len(tracks))
         except subprocess.CalledProcessError as exc:
             failed += 1
             print(f"  x {dst.name}: ffmpeg fallo ({exc.returncode})", file=sys.stderr)
             continue
+        expected = (t.end if t.end is not None else duration) - t.start
+        got, _ = probe(dst)
+        if abs(got - expected) > 1:
+            print(f"  ! {dst.name}: dura {got:.0f} s y deberia durar {expected:.0f} s")
         size = dst.stat().st_size
         mb = size / (1024 * 1024)
         if size > MAX_BYTES:
