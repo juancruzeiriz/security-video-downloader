@@ -141,3 +141,20 @@ Una vez que confirmaste que el video se puede bajar con un script, el siguiente
 paso es cerrar cada agujero. El modelo de amenazas y las contramedidas (tokens
 cortos y renovables, binding a sesión/IP, AES-128, DRM, rate limiting, marca de
 agua, etc.) están en **[docs/threat-model.md](docs/threat-model.md)**.
+
+## Extra: video → MP3 cortado en temas
+
+[scripts/split_to_mp3.py](scripts/split_to_mp3.py) pasa un video (p. ej. un
+show grabado) a **MP3, 44.1 kHz, 128 kbps CBR, estéreo** y lo corta en un archivo
+por tema, a partir de una lista `MM:SS - Título` (cada tema termina donde empieza
+el siguiente; el último va hasta el final). Avisa si algún tema pasa de 30 MB.
+
+```bash
+# solo ffmpeg/ffprobe en el PATH
+python scripts/split_to_mp3.py                          # convert_to_audio/videoplayback.mp4 + DEFAULT_TRACKLIST
+python scripts/split_to_mp3.py show.mp4 --tracks temas.txt --out media/mp3/show
+```
+
+Los temas quedan en `media/mp3/<nombre del video>/` como `01 - Título.mp3`,
+con título y número de pista en los tags. `convert_to_audio/` está gitignoreado
+para que el video no se suba al repo.
