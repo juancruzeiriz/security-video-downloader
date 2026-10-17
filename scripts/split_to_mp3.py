@@ -101,7 +101,8 @@ def parse_tracklist(text: str) -> list[Track]:
 
 def safe_filename(name: str) -> str:
     """Saca caracteres que Windows/Mac no aceptan en nombres de archivo."""
-    name = re.sub(r'[\\/:*?"<>|]+', "", name).strip().rstrip(".")
+    name = re.sub(r'[\\/:*?"<>|]+', "", name)
+    name = re.sub(r"\s+", " ", name).strip().rstrip(".")
     return name or "audio"
 
 
